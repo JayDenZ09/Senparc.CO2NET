@@ -19,7 +19,7 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
 #endregion Apache License Version 2.0
 
 /*----------------------------------------------------------------
-    Copyright (C) 2018 Senparc
+    Copyright (C) 2019 Senparc
 
     文件名：RequestUtility.cs
     文件功能描述：获取请求结果
@@ -54,6 +54,12 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
 
     修改标识：Senparc - 20181215
     修改描述：v0.3.1 更新 RequestUtility.GetQueryString() 方法
+
+    修改标识：Senparc - 20190429
+    修改描述：v0.7.0 优化 HttpClient，重构 RequestUtility（包括 Post 和 Get），引入 HttpClientFactory 机制
+
+    修改标识：Senparc - 20190521
+    修改描述：v0.7.3 .NET Core 提供多证书注册功能
 
 ----------------------------------------------------------------*/
 
@@ -115,7 +121,12 @@ namespace Senparc.CO2NET.HttpUtility
             _webproxy = null;
         }
 #else
-        private static IWebProxy _webproxy = null;
+
+        /// <summary>
+        /// 作用于 SenparcHttpClient 的 WebProxy（需要在 AddSenparcGlobalServices 之前定义）
+        /// </summary>
+        public static IWebProxy SenparcHttpClientWebProxy { get; set; } = null;
+
         /// <summary>
         /// 设置Web代理
         /// </summary>
@@ -129,7 +140,7 @@ namespace Senparc.CO2NET.HttpUtility
             cred = new NetworkCredential(username, password);
             if (!string.IsNullOrEmpty(host))
             {
-                _webproxy = new CoreWebProxy(new Uri(host + ":" + port ?? "80"), cred);
+                SenparcHttpClientWebProxy = new CoreWebProxy(new Uri(host + ":" + port ?? "80"), cred);
             }
         }
 
@@ -138,7 +149,7 @@ namespace Senparc.CO2NET.HttpUtility
         /// </summary>
         public static void RemoveHttpProxy()
         {
-            _webproxy = null;
+            SenparcHttpClientWebProxy = null;
         }
 
         /// <summary>
@@ -218,9 +229,16 @@ namespace Senparc.CO2NET.HttpUtility
         /// <param name="chain"></param>
         /// <param name="sslPolicyErrors"></param>
         /// <returns></returns>
-        private static bool CheckValidationResult(HttpRequestMessage request, X509Certificate2 certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
+        public static bool CheckValidationResult(HttpRequestMessage request, X509Certificate2 certificate, X509Chain chain, SslPolicyErrors sslPolicyErrors)
         {
-            return true;
+            if (sslPolicyErrors == SslPolicyErrors.None)
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         private static StreamContent CreateFileContent(Stream stream, string formName, string fileName, string contentType = "application/octet-stream")
@@ -328,7 +346,7 @@ namespace Senparc.CO2NET.HttpUtility
         {
             string dataString = GetQueryString(formData);
             var formDataBytes = formData == null ? new byte[0] : Encoding.UTF8.GetBytes(dataString);
-            await stream.WriteAsync(formDataBytes, 0, formDataBytes.Length);
+            await stream.WriteAsync(formDataBytes, 0, formDataBytes.Length).ConfigureAwait(false);
             stream.Seek(0, SeekOrigin.Begin);//设置指针读取位置
         }
 

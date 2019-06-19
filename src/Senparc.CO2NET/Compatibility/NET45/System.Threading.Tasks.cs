@@ -19,22 +19,34 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
 #endregion Apache License Version 2.0
 
 /*----------------------------------------------------------------
-    Copyright (C) 2018 Senparc
+    Copyright (C) 2019 Senparc
 
     文件名：System.Threading.Tasks.cs
-    文件功能描述：为了弥补NET3.5没有System.Threading.Tasks命名空间的问题
+    文件功能描述：为了弥补NET3.5没有System.Threading.Tasks命名空间下某些方法的问题
 
 
-    创建标识：Senparc - 20171007
+    创建标识：Senparc - 20190412
 
 ----------------------------------------------------------------*/
 
-#if NET35
+#if !NET35 && !NET40
 namespace System.Threading.Tasks
 {
-    public static class JustForNet35
+    public static class TaskExtension
     {
+        /// <summary>
+        /// 使 Task.Completed 兼容 .NET 4.5 的方法
+        /// </summary>
+        /// <returns></returns>
+        public static Task CompletedTask()
+        {
+#if NET45
+            return Task.FromResult<object>(null);
+#else
+            return Task.CompletedTask;
+#endif
 
+        }
     }
 }
 #endif

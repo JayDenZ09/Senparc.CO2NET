@@ -19,7 +19,7 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
 #endregion Apache License Version 2.0
 
 /*----------------------------------------------------------------
-    Copyright (C) 2018 Senparc
+    Copyright (C) 2019 Senparc
 
     文件名：DataOperation.cs
     文件功能描述：每一次跟踪日志的对象信息
@@ -28,23 +28,34 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
     创建标识：Senparc - 20180602
 
     修改标识：Senparc - 20181226
-    修改描述：v0.4.3 修改 DateTime 为 DateTimeOffset
+    修改描述：支持 NeuChar v0.4.3 修改 DateTime 为 DateTimeOffset
 
- ----------------------------------------------------------------*/
+    修改标识：Senparc - 20181116
+    修改描述：v0.2.5 添加 ReadAndCleanDataItems 的 keepTodayData 属性，保留当天数据
+
+    修改标识：Senparc - 20190523
+    修改描述：v0.4 使用异步方法提升并发效率
+
+    修改标识：Senparc - 20190523
+    修改描述：v0.4.1.1 在静态构造函数中初始化 KindNameStore
+
+----------------------------------------------------------------*/
 
 
 using Senparc.CO2NET.APM.Exceptions;
 using Senparc.CO2NET.Trace;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Senparc.CO2NET.APM
 {
     /// <summary>
-    /// 
+    /// DataOperation
     /// </summary>
     public class DataOperation
     {
@@ -55,7 +66,7 @@ namespace Senparc.CO2NET.APM
         private string _domainKey;
 
         //TODO：需要考虑分布式的情况，最好储存在缓存中
-        private static Dictionary<string, Dictionary<string, DateTimeOffset>> KindNameStore { get; set; } = new Dictionary<string, Dictionary<string, DateTimeOffset>>();
+        private static Dictionary<string, Dictionary<string, DateTimeOffset>> KindNameStore { get; set; } //= new Dictionary<string, Dictionary<string, DateTimeOffset>>();
 
         private string BuildFinalKey(string kindName)
         {
@@ -66,7 +77,7 @@ namespace Senparc.CO2NET.APM
         /// 注册 Key
         /// </summary>
         /// <param name="kindName"></param>
-        private void RegisterFinalKey(string kindName)
+        private async Task RegisterFinalKeyAsync(string kindName)
         {
             if (KindNameStore[_domain].ContainsKey(kindName))
             {
@@ -75,16 +86,15 @@ namespace Senparc.CO2NET.APM
 
             var cacheStragety = Cache.CacheStrategyFactory.GetObjectCacheStrategyInstance();
             var kindNameKey = $"{_domainKey}:_KindNameStore";
-            var keyList = cacheStragety.Get<List<string>>(kindNameKey, true) ?? new List<string>();
+            var keyList = await cacheStragety.GetAsync<List<string>>(kindNameKey, true).ConfigureAwait(false) ?? new List<string>();
             if (!keyList.Contains(kindName))
             {
                 keyList.Add(kindName);
-                cacheStragety.Set(kindNameKey, keyList, isFullKey: true);//永久储存
+                await cacheStragety.SetAsync(kindNameKey, keyList, isFullKey: true).ConfigureAwait(false); ;//永久储存
             }
+
             KindNameStore[_domain][kindName] = SystemTime.Now;
         }
-
-
 
         /// <summary>
         /// DataOperation 构造函数
@@ -101,6 +111,12 @@ namespace Senparc.CO2NET.APM
             }
         }
 
+        static DataOperation()
+        {
+            KindNameStore = new Dictionary<string, Dictionary<string, DateTimeOffset>>();
+
+        }
+
         /// <summary>
         /// 设置数据
         /// </summary>
@@ -110,15 +126,20 @@ namespace Senparc.CO2NET.APM
         /// <param name="tempStorage">临时储存信息</param>
         /// <param name="dateTime">发生时间，默认为当前系统时间</param>
         /// <returns></returns>
-        public DataItem Set(string kindName, double value, object data = null, object tempStorage = null, DateTimeOffset? dateTime = null)
+        public async Task<DataItem> SetAsync(string kindName, double value, object data = null, object tempStorage = null, DateTimeOffset? dateTime = null)
         {
+            if (!Config.EnableAPM)
+            {
+                return null;//不启用，不进行记录
+            }
+
             try
             {
                 var dt1 = SystemTime.Now;
                 var cacheStragety = Cache.CacheStrategyFactory.GetObjectCacheStrategyInstance();
                 var finalKey = BuildFinalKey(kindName);
                 //使用同步锁确定写入顺序
-                using (cacheStragety.BeginCacheLock("SenparcAPM", finalKey))
+                using (await cacheStragety.BeginCacheLockAsync("SenparcAPM", finalKey).ConfigureAwait(false))
                 {
                     var dataItem = new DataItem()
                     {
@@ -129,11 +150,11 @@ namespace Senparc.CO2NET.APM
                         DateTime = dateTime ?? SystemTime.Now
                     };
 
-                    var list = GetDataItemList(kindName);
+                    var list = await GetDataItemListAsync(kindName).ConfigureAwait(false);
                     list.Add(dataItem);
-                    cacheStragety.Set(finalKey, list, Config.DataExpire, true);
+                    await cacheStragety.SetAsync(finalKey, list, Config.DataExpire, true).ConfigureAwait(false);
 
-                    RegisterFinalKey(kindName);//注册Key
+                    await RegisterFinalKeyAsync(kindName).ConfigureAwait(false);//注册Key
 
                     if (SenparcTrace.RecordAPMLog)
                     {
@@ -155,13 +176,13 @@ namespace Senparc.CO2NET.APM
         /// </summary>
         /// <param name="kindName"></param>
         /// <returns></returns>
-        public List<DataItem> GetDataItemList(string kindName)
+        public async Task<List<DataItem>> GetDataItemListAsync(string kindName)
         {
             try
             {
                 var cacheStragety = Cache.CacheStrategyFactory.GetObjectCacheStrategyInstance();
                 var finalKey = BuildFinalKey(kindName);
-                var list = cacheStragety.Get<List<DataItem>>(finalKey, true);
+                var list = await cacheStragety.GetAsync<List<DataItem>>(finalKey, true).ConfigureAwait(false);
                 return list ?? new List<DataItem>();
             }
             catch (Exception e)
@@ -176,7 +197,8 @@ namespace Senparc.CO2NET.APM
         /// </summary>
         /// <returns></returns>
         /// <param name="removeReadItems">是否移除已读取的项目，默认为 true</param>
-        public List<MinuteDataPack> ReadAndCleanDataItems(bool removeReadItems = true)
+        /// <param name="keepTodayData">当 removeReadItems = true 时有效，在清理的时候是否保留当天的数据</param>
+        public async Task<List<MinuteDataPack>> ReadAndCleanDataItemsAsync(bool removeReadItems = true, bool keepTodayData = true)
         {
             try
             {
@@ -186,33 +208,36 @@ namespace Senparc.CO2NET.APM
                 Dictionary<string, List<DataItem>> tempDataItems = new Dictionary<string, List<DataItem>>();
 
                 var systemNow = SystemTime.Now.UtcDateTime;//统一UTC时间
-                var nowMinuteTime = new DateTimeOffset(systemNow.Year, systemNow.Month, systemNow.Day, systemNow.Hour, systemNow.Minute, 0, TimeSpan.Zero);
+                var nowMinuteTime = SystemTime.Now.AddSeconds(-SystemTime.Now.Second).AddMilliseconds(-SystemTime.Now.Millisecond);// new DateTimeOffset(systemNow.Year, systemNow.Month, systemNow.Day, systemNow.Hour, systemNow.Minute, 0, TimeSpan.Zero);
 
                 //快速获取并清理数据
                 foreach (var item in KindNameStore[_domain])
                 {
                     var kindName = item.Key;
                     var finalKey = BuildFinalKey(kindName);
-                    using (cacheStragety.BeginCacheLock("SenparcAPM", finalKey))
+                    using (await cacheStragety.BeginCacheLockAsync("SenparcAPM", finalKey).ConfigureAwait(false))
                     {
-                        var list = GetDataItemList(item.Key);//获取列表
-                        var toveRemove = list.Where(z => z.DateTime < nowMinuteTime);
+                        var list = await GetDataItemListAsync(item.Key).ConfigureAwait(false);//获取列表
+                        var completedStatData = list.Where(z => z.DateTime < nowMinuteTime).ToList();//统计范围内的所有数据
 
-                        tempDataItems[kindName] = toveRemove.ToList();//添加到列表
+                        tempDataItems[kindName] = completedStatData;//添加到列表
 
                         if (removeReadItems)
                         {
+                            //筛选需要删除的数据
+                            var tobeRemove = completedStatData.Where(z => keepTodayData ? z.DateTime < SystemTime.Today : true);
+
                             //移除已读取的项目
-                            if (toveRemove.Count() == list.Count())
+                            if (tobeRemove.Count() == list.Count())
                             {
                                 //已经全部删除
-                                cacheStragety.RemoveFromCache(finalKey, true);//删除
+                                await cacheStragety.RemoveFromCacheAsync(finalKey, true).ConfigureAwait(false);//删除
                             }
                             else
                             {
                                 //部分删除
-                                var newList = list.Except(toveRemove).ToList();
-                                cacheStragety.Set(finalKey, newList, Config.DataExpire, true);
+                                var newList = list.Except(tobeRemove).ToList();
+                                await cacheStragety.SetAsync(finalKey, newList, Config.DataExpire, true).ConfigureAwait(false);
                             }
                         }
                     }
@@ -242,7 +267,7 @@ namespace Senparc.CO2NET.APM
                             minuteDataPack.MinuteDataList.Add(minuteData);
 
                             minuteData.KindName = dataItem.KindName;
-                            minuteData.Time = new DateTimeOffset(dataItem.DateTime.Year, dataItem.DateTime.Month, dataItem.DateTime.Day, dataItem.DateTime.Hour, dataItem.DateTime.Minute, 0,TimeSpan.Zero);
+                            minuteData.Time = new DateTimeOffset(dataItem.DateTime.Year, dataItem.DateTime.Month, dataItem.DateTime.Day, dataItem.DateTime.Hour, dataItem.DateTime.Minute, 0, TimeSpan.Zero);
                             minuteData.StartValue = dataItem.Value;
                             minuteData.HighestValue = dataItem.Value;
                             minuteData.LowestValue = dataItem.Value;

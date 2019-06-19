@@ -19,7 +19,7 @@ Detail: https://github.com/Senparc/Senparc.CO2NET/blob/master/LICENSE
 #endregion Apache License Version 2.0
 
 /*----------------------------------------------------------------
-    Copyright (C) 2018 Senparc
+    Copyright (C) 2019 Senparc
 
     文件名：LocalContainerCacheStrategy.cs
     文件功能描述：本地容器缓存。
@@ -47,6 +47,7 @@ using System.Linq;
 using System.Text;
 using Senparc.CO2NET.Cache;
 using Senparc.CO2NET.Exceptions;
+using System.Threading.Tasks;
 #if NET35 || NET40 || NET45
 using System.Web;
 #else
@@ -129,7 +130,6 @@ namespace Senparc.CO2NET.Cache
         private System.Web.Caching.Cache _cache = LocalObjectCacheHelper.LocalObjectCache;
 #else
         private IMemoryCache _cache = LocalObjectCacheHelper.LocalObjectCache;
-
 #endif
 
         #endregion
@@ -172,11 +172,14 @@ namespace Senparc.CO2NET.Cache
         //    get { return LocalContainerCacheStrategy.Instance; }
         //}
 
+        #region 同步方法
+
         [Obsolete("此方法已过期，请使用 Set(TKey key, TValue value) 方法")]
         public void InsertToCache(string key, object value, TimeSpan? expiry = null)
         {
             Set(key, value, expiry, false);
         }
+
 
         public void Set(string key, object value, TimeSpan? expiry = null, bool isFullKey = false)
         {
@@ -349,10 +352,61 @@ namespace Senparc.CO2NET.Cache
             Set(key, value, expiry, isFullKey);
         }
 
-        //public void UpdateContainerBag(string key, object bag, bool isFullKey = false)
-        //{
-        //    Update(key, bag, isFullKey);
-        //}
+        #endregion
+
+        #region 异步方法
+#if !NET35 && !NET40
+
+        public async Task SetAsync(string key, object value, TimeSpan? expiry = null, bool isFullKey = false)
+        {
+            await Task.Factory.StartNew(() => Set(key, value, expiry, isFullKey)).ConfigureAwait(false);
+        }
+
+        public async Task RemoveFromCacheAsync(string key, bool isFullKey = false)
+        {
+            await Task.Factory.StartNew(() => RemoveFromCache(key, isFullKey)).ConfigureAwait(false);
+        }
+
+        public async Task<object> GetAsync(string key, bool isFullKey = false)
+        {
+            return await Task.Factory.StartNew(() => Get(key, isFullKey)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// 返回指定缓存键的对象，并强制指定类型
+        /// </summary>
+        /// <param name="key">缓存键</param>
+        /// <param name="isFullKey">是否已经是完整的Key，如果不是，则会调用一次GetFinalKey()方法</param>
+        /// <returns></returns>
+        public async Task<T> GetAsync<T>(string key, bool isFullKey = false)
+        {
+            return await Task.Factory.StartNew(() => Get<T>(key, isFullKey)).ConfigureAwait(false);
+        }
+
+        public async Task<IDictionary<string, object>> GetAllAsync()
+        {
+            return await Task.Factory.StartNew(() => GetAll()).ConfigureAwait(false);
+        }
+
+
+        public async Task<bool> CheckExistedAsync(string key, bool isFullKey = false)
+        {
+            return await Task.Factory.StartNew(() => CheckExisted(key, isFullKey)).ConfigureAwait(false);
+
+        }
+
+        public async Task<long> GetCountAsync()
+        {
+            return await Task.Factory.StartNew(() => GetCount()).ConfigureAwait(false);
+        }
+
+
+        public async Task UpdateAsync(string key, object value, TimeSpan? expiry = null, bool isFullKey = false)
+        {
+            await Task.Factory.StartNew(() => Update(key, value, expiry, isFullKey)).ConfigureAwait(false);
+        }
+#endif
+        #endregion
 
         #endregion
 
@@ -360,9 +414,15 @@ namespace Senparc.CO2NET.Cache
 
         public override ICacheLock BeginCacheLock(string resourceName, string key, int retryCount = 0, TimeSpan retryDelay = new TimeSpan())
         {
-            return new LocalCacheLock(this, resourceName, key, retryCount, retryDelay);
+            return LocalCacheLock.CreateAndLock(this, resourceName, key, retryCount, retryDelay);
         }
 
+#if !NET35 && !NET40
+        public override async Task<ICacheLock> BeginCacheLockAsync(string resourceName, string key, int retryCount = 0, TimeSpan retryDelay = new TimeSpan())
+        {
+            return await LocalCacheLock.CreateAndLockAsync(this, resourceName, key, retryCount, retryDelay).ConfigureAwait(false);
+        }
+#endif
         #endregion
 
     }
